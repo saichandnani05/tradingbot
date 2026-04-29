@@ -324,10 +324,14 @@ def index():
 
 @app.route("/api/state")
 def api_state():
-    # On Vercel there is no background thread — refresh on every request.
+    # On Vercel there is no background thread — trigger a refresh on every
+    # request, but cap it at 25 s so the Lambda always returns before the
+    # 60 s maxDuration limit (avoids the browser hanging on "Connecting…").
     import os
     if os.getenv("VERCEL") or os.getenv("VERCEL_ENV"):
-        refresh_once()
+        _t = threading.Thread(target=refresh_once, daemon=True)
+        _t.start()
+        _t.join(timeout=25)
 
     with STATE_LOCK:
         payload = dict(STATE)

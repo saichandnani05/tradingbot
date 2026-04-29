@@ -13,5 +13,10 @@
   "env": {
     "PAPER_MODE": "true",
     "STARTING_WALLET": "100000"
+  },
+  "functions": {
+    "wsgi.py": {
+      "maxDuration": 60
+    }
   }
 }

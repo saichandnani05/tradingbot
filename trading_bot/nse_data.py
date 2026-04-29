@@ -28,8 +28,8 @@ import requests
 log = logging.getLogger(__name__)
 
 _BASE       = "https://www.nseindia.com"
-_COOKIE_TTL = 180        # refresh session every 3 minutes (was 4.5)
-_TIMEOUT    = 15         # per-request timeout
+_COOKIE_TTL = 180        # refresh session every 3 minutes
+_TIMEOUT    = 6          # per-request timeout (was 15 — too slow for serverless)
 
 # ── Rotate UA strings so NSE doesn't fingerprint a single bot identity ────────
 _USER_AGENTS = [
@@ -104,17 +104,27 @@ class NSEClient:
         s  = requests.Session()
         s.headers.update(_make_headers(ua))
 
-        # Prime cookies: visit each NSE page in order with small random delays
-        ok = False
-        for url in _PRIME_URLS:
+        # Prime cookies concurrently — all 3 URLs at once instead of sequentially.
+        # Old sequential approach took up to 45 s (3 × 15 s timeout + delays).
+        # Concurrent approach completes in ~_TIMEOUT seconds worst-case.
+        results: Dict[str, bool] = {}
+
+        def _prime(url: str) -> None:
             try:
                 r = s.get(url, timeout=_TIMEOUT)
-                if r.status_code == 200:
-                    ok = True
-                time.sleep(random.uniform(0.3, 0.8))
+                results[url] = (r.status_code == 200)
             except requests.RequestException as exc:
                 log.warning("NSE session prime (%s): %s", url, exc)
+                results[url] = False
 
+        threads = [threading.Thread(target=_prime, args=(url,), daemon=True)
+                   for url in _PRIME_URLS]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=_TIMEOUT + 1)   # never block longer than one timeout
+
+        ok = any(results.values())
         if ok:
             self._session      = s
             self._last_refresh = time.time()
@@ -147,7 +157,7 @@ class NSEClient:
                     log.info("NSE %d on %s — forcing session refresh.", r.status_code, path)
                     with self._lock:
                         self._last_refresh = 0.0
-                    time.sleep(2.0 + attempt * 1.5)
+                    time.sleep(1.0 + attempt * 0.5)   # was 2.0 + 1.5×
                     continue
 
                 r.raise_for_status()
@@ -158,13 +168,13 @@ class NSEClient:
                     log.warning("NSE returned non-JSON on %s (ct=%s) — refreshing session", path, ct)
                     with self._lock:
                         self._last_refresh = 0.0
-                    time.sleep(1.5)
+                    time.sleep(0.5)                    # was 1.5
                     continue
 
                 data = r.json()
                 if data is None:
                     log.warning("NSE returned null JSON on %s", path)
-                    time.sleep(1.5 * (attempt + 1))
+                    time.sleep(0.5 * (attempt + 1))   # was 1.5×
                     continue
 
                 return data
@@ -172,7 +182,7 @@ class NSEClient:
             except (requests.RequestException, ValueError) as exc:
                 self._fail_count += 1
                 log.warning("NSE GET %s attempt %d/%d: %s", path, attempt + 1, retries, exc)
-                time.sleep(1.5 * (attempt + 1))
+                time.sleep(0.5 * (attempt + 1))   # was 1.5×
 
         log.error("NSE GET %s failed after %d attempts.", path, retries)
         return None
@@ -246,13 +256,15 @@ class NSEClient:
 
         records = data.get("records") or {}
 
-        # ── 1. Filter to FUTURE expiries only ─────────────────────────────────
+        # ── 1. Filter to STRICTLY FUTURE expiries only ────────────────────────
+        # Use d > today (not >=) so same-day expiry contracts are NEVER picked.
+        # Trading an option that expires today carries extreme gamma / theta risk.
         today           = _date.today()
         raw_expiries    = records.get("expiryDates") or []
         future_expiries: List[str] = []
         for e in raw_expiries:
             d = _parse_nse_date(e)
-            if d and d >= today:
+            if d and d > today:          # strictly greater — excludes today
                 future_expiries.append(e)
 
         if not future_expiries:
@@ -356,7 +368,7 @@ class NSEClient:
         records = data.get("records") or {}
         today   = _date.today()
         raw_exp = records.get("expiryDates") or []
-        future  = [e for e in raw_exp if (_parse_nse_date(e) or _date.min) >= today]
+        future  = [e for e in raw_exp if (_parse_nse_date(e) or _date.min) > today]  # exclude today
         if not future:
             return None
         expiry = future[min(expiry_index, len(future) - 1)]
@@ -433,7 +445,7 @@ class NSEClient:
         raw_expiries = records.get("expiryDates") or []
         today        = _date.today()
         future       = [e for e in raw_expiries
-                        if (_parse_nse_date(e) or _date.min) >= today]
+                        if (_parse_nse_date(e) or _date.min) > today]  # exclude today
         if not future:
             return None
         expiry = future[min(expiry_index, len(future) - 1)]

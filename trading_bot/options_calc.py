@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, time as _time, timedelta, timezone
+from datetime import date, timedelta
 
 
 STRIKE_STEP = {
@@ -20,16 +20,13 @@ STRIKE_STEP = {
 
 # ── NSE weekly option expiry weekdays (0=Mon … 6=Sun) ─────────────────────────
 # NIFTY 50   → Thursday (3)
-# BANKNIFTY  → Wednesday (2)   ← most common source of "wrong expiry" bugs
+# BANKNIFTY  → Wednesday (2)
 # FINNIFTY   → Tuesday (1)
 _EXPIRY_WEEKDAY = {
     "NIFTY":     3,   # Thursday
     "BANKNIFTY": 2,   # Wednesday
     "FINNIFTY":  1,   # Tuesday
 }
-
-_IST = timezone(timedelta(hours=5, minutes=30))
-_MARKET_CLOSE_TIME = _time(15, 30)
 
 
 @dataclass
@@ -44,30 +41,27 @@ class Option:
 
 def next_weekly_expiry(today: date | None = None,
                        symbol: str = "NIFTY") -> date:
-    """Return the next live expiry date for the given index.
+    """Return the NEXT valid expiry date for the given index.
 
     Each NSE index has its own expiry weekday:
       NIFTY     → Thursday
       BANKNIFTY → Wednesday
       FINNIFTY  → Tuesday
 
-    If today IS the expiry day, the current expiry is returned only while the
-    market is still open (before 15:30 IST).  After close we jump to next week.
+    Same-day expiry is ALWAYS skipped — trading an option that expires today
+    carries extreme gamma / theta risk and is never appropriate for this bot.
+    If today is the expiry weekday we jump straight to next week's contract.
     """
     today = today or date.today()
     target_wd = _EXPIRY_WEEKDAY.get(symbol.upper(), 3)   # default Thursday
 
-    if today.weekday() == target_wd:
-        # Today is expiry day — use it only if market is still open
-        now_ist = datetime.now(_IST).time()
-        if now_ist < _MARKET_CLOSE_TIME:
-            return today
-        else:
-            return today + timedelta(days=7)   # already expired today
-
+    # How many calendar days until the target weekday?
     days_ahead = (target_wd - today.weekday()) % 7
+
+    # days_ahead == 0 means today IS expiry day — always skip to next week.
     if days_ahead == 0:
         days_ahead = 7
+
     return today + timedelta(days=days_ahead)
 
 
