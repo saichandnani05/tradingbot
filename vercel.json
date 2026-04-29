@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "wsgi.py",
+      "use": "@vercel/python",
+      "config": { "maxLambdaSize": "100mb" }
+    }
+  ],
+  "routes": [
+    { "src": "/(.*)", "dest": "wsgi.py" }
+  ],
+  "env": {
+    "PAPER_MODE": "true",
+    "STARTING_WALLET": "100000"
+  }
+}

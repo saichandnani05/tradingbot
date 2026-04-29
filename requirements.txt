@@ -1,0 +1,14 @@
+Flask==3.0.3
+pandas==2.2.2
+numpy==1.26.4
+python-dotenv==1.0.1
+requests==2.32.3
+yfinance>=0.2.50
+openpyxl==3.1.5
+gunicorn==21.2.0
+
+# --- Angel One SmartAPI (live trading) ---
+smartapi-python==1.5.5
+pyotp==2.9.0
+websocket-client==1.6.4
+logzero==1.7.0

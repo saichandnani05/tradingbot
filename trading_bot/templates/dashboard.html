@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Paper Trading Bot — Nifty / BankNifty</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0b1020; --card: #151b2d; --border: #26304a;
+      --text: #e8ecf4; --muted: #8a94ad;
+      --good: #22c55e; --bad: #ef4444; --warn: #f59e0b; --accent: #6366f1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--border);
+      background: #0f1528; flex-wrap: wrap;
+    }
+    header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; white-space: nowrap; }
+    .meta {
+      color: var(--muted); font-size: 12px;
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .mode-pill {
+      padding: 3px 9px; font-size: 11px; border-radius: 999px;
+      background: rgba(245,158,11,.15); color: var(--warn);
+      border: 1px solid rgba(245,158,11,.3);
+    }
+    #conn-dot {
+      display: inline-block; width: 8px; height: 8px;
+      border-radius: 50%; background: var(--muted);
+      transition: background .3s; flex-shrink: 0;
+    }
+    #conn-dot.ok   { background: var(--good); }
+    #conn-dot.err  { background: var(--bad); }
+    #conn-dot.spin { background: var(--warn); animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    /* ── Market status banner ── */
+    #market-banner {
+      display: none; align-items: center; gap: 10px;
+      padding: 10px 20px; font-size: 13px;
+      border-bottom: 1px solid var(--border);
+    }
+    #market-banner.closed { background: rgba(239,68,68,.08); color: #fca5a5; display: flex; }
+    #market-banner.open   { background: rgba(34,197,94,.08);  color: #86efac; display: flex; }
+    #market-banner .mkt-icon { font-size: 16px; }
+
+    /* ── Daily profit target bar ── */
+    #daily-bar-wrap {
+      padding: 10px 20px; border-bottom: 1px solid var(--border);
+      background: #0d1325; display: none;
+    }
+    #daily-bar-wrap.visible { display: block; }
+    .daily-header {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 12px; color: var(--muted); margin-bottom: 6px;
+    }
+    .daily-header .daily-pct {
+      font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums;
+    }
+    .daily-header .daily-pct.pos { color: var(--good); }
+    .daily-header .daily-pct.neg { color: var(--bad); }
+    .progress-track {
+      height: 8px; border-radius: 4px; background: #1f2942; overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%; border-radius: 4px; transition: width .4s ease;
+      background: linear-gradient(90deg, #6366f1, #22c55e);
+    }
+    .progress-fill.target-hit { background: linear-gradient(90deg, #22c55e, #16a34a); }
+    .progress-fill.neg { background: linear-gradient(90deg, #ef4444, #dc2626); }
+    #daily-locked-msg {
+      display: none; margin-top: 6px; font-size: 12px; color: var(--good);
+      font-weight: 600;
+    }
+    #daily-locked-msg.show { display: block; }
+
+    /* ── Wallet strip ── */
+    .wallet {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 10px; padding: 14px 20px; background: #0d1325;
+      border-bottom: 1px solid var(--border);
+    }
+    .wallet .box {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 12px;
+    }
+    .wallet .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+    .wallet .v { font-size: 17px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+    .wallet input {
+      width: 100%; background: #0b1020; border: 1px solid var(--border);
+      color: var(--text); border-radius: 6px; padding: 6px 8px; font-size: 13px;
+    }
+    .wallet button {
+      margin-top: 6px; padding: 6px 10px; border: 0; border-radius: 6px;
+      background: var(--accent); color: white; font-weight: 600; cursor: pointer; font-size: 12px;
+    }
+    .wallet button.warn { background: #374151; }
+    .pos { color: var(--good); } .neg { color: var(--bad); }
+
+    /* ── Cards grid ── */
+    .grid {
+      display: grid; gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      padding: 16px 20px;
+    }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px 16px;
+    }
+    .card h2 { margin: 0 0 8px; font-size: 15px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .pill {
+      padding: 2px 8px; font-size: 11px; border-radius: 999px;
+      background: #1f2942; color: var(--muted);
+    }
+    .pill.good { background: rgba(34,197,94,.15); color: var(--good); }
+    .pill.bad  { background: rgba(239,68,68,.15); color: var(--bad); }
+    .pill.warn { background: rgba(245,158,11,.15); color: var(--warn); }
+    .row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
+    .row .k { color: var(--muted); }
+    .reasons { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .reasons span {
+      display: inline-block; margin: 2px 4px 0 0; padding: 2px 7px;
+      background: #1f2942; border-radius: 6px;
+    }
+    .cta { display: flex; gap: 10px; margin-top: 12px; }
+    button.big {
+      flex: 1; padding: 10px; border: 0; border-radius: 8px;
+      font-weight: 600; cursor: pointer; font-size: 14px;
+    }
+    .buy  { background: var(--good); color: #062c14; }
+    .sell { background: var(--bad);  color: #3b0a0a; }
+    .rr-badge {
+      display: inline-block; padding: 1px 7px; font-size: 11px; border-radius: 999px;
+      background: rgba(99,102,241,.2); color: #a5b4fc; font-weight: 700;
+    }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 18px; right: 18px; max-width: 380px;
+      background: #1b2340; border: 1px solid var(--border); color: var(--text);
+      padding: 12px 14px; border-radius: 10px; font-size: 13px;
+      opacity: 0; transform: translateY(10px); transition: all .2s; z-index: 10;
+    }
+    #toast.show { opacity: 1; transform: none; }
+
+    /* ── Tables ── */
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; }
+    td.mono, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .close-btn { background: #334155; color: white; border: 0;
+      padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; }
+
+    /* ── Footer ── */
+    .disclaimer {
+      padding: 10px 20px; font-size: 12px; color: var(--muted);
+      border-top: 1px solid var(--border); background: #0f1528;
+    }
+    a { color: var(--accent); }
+    .loading-msg { color: var(--muted); text-align: center; padding: 40px 20px; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ Paper Trading Bot <span id="mode" class="mode-pill">PAPER</span></h1>
+  <div class="meta">
+    <span id="conn-dot" class="spin" title="Connecting…"></span>
+    <span id="vix">VIX –</span> ·
+    <span id="refresh-lbl">connecting…</span>
+    · <a id="dl" href="/api/trades.xlsx" target="_blank" rel="noopener">Download trades.xlsx</a>
+  </div>
+</header>
+
+<!-- Market status banner -->
+<div id="market-banner">
+  <span class="mkt-icon" id="mkt-icon">🔴</span>
+  <span id="mkt-msg">Checking market hours…</span>
+</div>
+
+<!-- Daily profit target progress bar -->
+<div id="daily-bar-wrap">
+  <div class="daily-header">
+    <span>🎯 Daily Profit Target (<span id="daily-target-pct">8</span>%)</span>
+    <span id="daily-pct-label" class="daily-pct">0.00%</span>
+  </div>
+  <div class="progress-track">
+    <div class="progress-fill" id="daily-fill" style="width:0%"></div>
+  </div>
+  <div id="daily-locked-msg">🔒 Daily target reached! No new entries for today. Excellent trading!</div>
+</div>
+
+<section class="wallet">
+  <div class="box"><div class="k">Starting Balance</div><div class="v mono" id="w-start">—</div></div>
+  <div class="box"><div class="k">Cash Balance</div><div class="v mono" id="w-balance">—</div></div>
+  <div class="box"><div class="k">Equity (Cash + MTM)</div><div class="v mono" id="w-equity">—</div></div>
+  <div class="box"><div class="k">Realized P&amp;L</div><div class="v mono" id="w-realized">—</div></div>
+  <div class="box"><div class="k">Unrealized P&amp;L</div><div class="v mono" id="w-unrealized">—</div></div>
+  <div class="box"><div class="k">Return</div><div class="v mono" id="w-return">—</div></div>
+  <div class="box">
+    <div class="k">Set Starting Amount (₹)</div>
+    <input id="w-input" type="number" min="1000" step="1000" placeholder="100000"/>
+    <div style="display:flex; gap:6px">
+      <button onclick="setWallet()">Start</button>
+      <button class="warn" onclick="resetWallet()">Reset</button>
+    </div>
+  </div>
+</section>
+
+<div id="cards" class="grid">
+  <div class="card loading-msg">⏳ Connecting to server…</div>
+</div>
+
+<div class="grid" style="padding-top:0">
+  <div class="card">
+    <h2>Open Positions</h2>
+    <table id="open-tbl"><thead><tr>
+      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>LTP</th>
+      <th>SL</th><th>Target</th><th>Unrealized</th><th></th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Recent Closed Trades</h2>
+    <table id="hist-tbl"><thead><tr>
+      <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Exit</th>
+      <th>P&amp;L</th><th>Reason</th><th>Time</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<div class="disclaimer">
+  Paper-trading mode · NSE India live data · Black-Scholes fallback when market closed ·
+  Daily 8% profit target auto-locks new entries once reached ·
+  Signals require strong confluence (score ≥ 5/10) with 2.5:1 minimum risk-reward
+</div>
+
+<div id="toast"></div>
+
+<script>
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  const fmt = (n, dp = 2) => {
+    if (n == null || n === "" || isNaN(Number(n))) return "—";
+    return Number(n).toLocaleString("en-IN", {
+      minimumFractionDigits: dp, maximumFractionDigits: dp,
+    });
+  };
+  const rupee = n => "₹" + fmt(n, 2);
+  const cls   = n => Number(n) > 0 ? "pos" : Number(n) < 0 ? "neg" : "";
+
+  function escHtml(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function escAttr(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;").replace(/'/g, "&#39;").replace(/"/g, "&quot;");
+  }
+
+  // ── Toast ──────────────────────────────────────────────────────────────────
+  let _toastTimer;
+  function toast(msg, ok = true) {
+    const t = document.getElementById("toast");
+    t.textContent = msg;
+    t.style.borderColor = ok ? "#22c55e" : "#ef4444";
+    t.classList.add("show");
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => t.classList.remove("show"), 4500);
+  }
+
+  // ── Connection dot ─────────────────────────────────────────────────────────
+  function setConnStatus(s) {
+    const d = document.getElementById("conn-dot");
+    d.className = s;
+    d.title = s === "ok" ? "Connected" : s === "err" ? "Server unreachable" : "Connecting…";
+  }
+
+  // ── Bias pill ──────────────────────────────────────────────────────────────
+  function biasPill(bias) {
+    const map = {
+      BULLISH: "good", BEARISH: "bad",
+      NEUTRAL: "warn", GATED: "warn",
+      NO_DATA: "", STALE_DATA: "", ERROR: "bad",
+    };
+    return `<span class="pill ${map[bias] || ""}">${escHtml(bias || "—")}</span>`;
+  }
+
+  // ── API helpers ────────────────────────────────────────────────────────────
+  async function apiPost(url, body) {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const ct = r.headers.get("content-type") || "";
+    if (!ct.includes("application/json")) {
+      const text = await r.text();
+      throw new Error(`Server returned non-JSON (${r.status}): ${text.slice(0, 120)}`);
+    }
+    return r.json();
+  }
+
+  // ── Wallet actions ─────────────────────────────────────────────────────────
+  async function setWallet() {
+    const amount = Number(document.getElementById("w-input").value);
+    if (!amount || amount < 1000) return toast("Enter at least ₹1,000", false);
+    try {
+      const j = await apiPost("/api/wallet/set", { amount });
+      if (j.status) { toast(`Wallet set to ${rupee(amount)}.`); refresh(); }
+      else toast("Failed: " + (j.error || "unknown"), false);
+    } catch (e) { toast("Wallet set failed: " + e.message, false); }
+  }
+
+  async function resetWallet() {
+    if (!confirm("Reset wallet and wipe trade history?")) return;
+    try {
+      const j = await apiPost("/api/wallet/reset");
+      if (j.status) { toast("Wallet reset."); refresh(); }
+      else toast("Reset failed: " + (j.error || "unknown"), false);
+    } catch (e) { toast("Reset failed: " + e.message, false); }
+  }
+
+  // ── Daily progress bar ─────────────────────────────────────────────────────
+  function renderDailyBar(daily) {
+    if (!daily) return;
+    const wrap   = document.getElementById("daily-bar-wrap");
+    const fill   = document.getElementById("daily-fill");
+    const label  = document.getElementById("daily-pct-label");
+    const locked = document.getElementById("daily-locked-msg");
+    const tgtEl  = document.getElementById("daily-target-pct");
+
+    wrap.classList.add("visible");
+    tgtEl.textContent = daily.target_pct || 8;
+
+    const pct    = Number(daily.current_pct) || 0;
+    const tgt    = Number(daily.target_pct)  || 8;
+    const widPct = Math.min(Math.abs(pct) / tgt * 100, 100).toFixed(1);
+
+    label.textContent = (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
+    label.className   = "daily-pct " + (pct >= 0 ? "pos" : "neg");
+
+    fill.style.width = widPct + "%";
+    fill.className   = "progress-fill" +
+      (daily.locked ? " target-hit" : pct < 0 ? " neg" : "");
+
+    locked.className = "daily-locked-msg" + (daily.locked ? " show" : "");
+  }
+
+  // ── Signal card renderer ───────────────────────────────────────────────────
+  function renderSignal(sig) {
+    const ind = sig.indicators || {};
+    const hasOpt = !!sig.option_symbol && sig.bias === "BULLISH" || sig.bias === "BEARISH";
+    const reasons = (sig.reasons || []).map(r => `<span>${escHtml(r)}</span>`).join("");
+
+    let stDir = "—";
+    if (ind.supertrend_dir === 1)       stDir = "↑ up";
+    else if (ind.supertrend_dir === -1) stDir = "↓ down";
+
+    // Score bar (out of 10)
+    const score    = Number(sig.score) || 0;
+    const scoreAbs = Math.min(Math.abs(score), 10);
+    const scorePct = (scoreAbs / 10 * 100).toFixed(0);
+    const scoreCol = score >= 5 ? "#22c55e" : score <= -5 ? "#ef4444" : "#f59e0b";
+
+    const pcr = sig.pcr != null ? `<div class="row"><span class="k">PCR</span>
+      <span class="mono">${Number(sig.pcr).toFixed(2)}</span></div>` : "";
+
+    const rrBadge = sig.risk_reward
+      ? `<span class="rr-badge">R:R ${Number(sig.risk_reward).toFixed(1)}x</span>` : "";
+
+    const payload = (hasOpt && sig.option_symbol) ? JSON.stringify({
+      symbol: sig.option_symbol, underlying: sig.symbol,
+      option_type: sig.option_type,
+      strike: sig.option_strike, token: sig.option_token,
+      exchange: sig.option_exchange,
+      qty: sig.qty, price: sig.entry,
+      stop_loss: sig.stop_loss, target: sig.target,
+      expiry: sig.option_expiry || "",
+    }) : null;
+
+    const optSection = (hasOpt && payload) ? `
+      <div style="border-top:1px dashed var(--border);padding-top:8px;margin-top:10px">
+        <div class="row">
+          <span class="k">${escHtml(sig.option_type || "")} @ ${escHtml(String(sig.option_strike || ""))}
+            &nbsp;${rrBadge}</span>
+          <span class="mono" style="font-size:11px">${escHtml(sig.option_symbol)}</span>
+        </div>
+        <div class="row"><span class="k">Entry / SL / Target</span>
+          <span class="mono">${fmt(sig.entry)} /
+            <b class="neg">${fmt(sig.stop_loss)}</b> /
+            <b class="pos">${fmt(sig.target)}</b></span></div>
+        <div class="row"><span class="k">Qty (${sig.lots} lot × ${sig.lot_size})</span>
+          <span class="mono">${sig.qty}</span></div>
+        <div class="row"><span class="k">Price source</span>
+          <span class="pill ${sig.price_source === "NSE_LIVE" ? "good" : "warn"}">
+            ${sig.price_source === "NSE_LIVE" ? "🟢 NSE Live" : "🟡 Est (Black-Scholes)"}</span></div>
+        <div class="cta">
+          <button class="big buy  js-order" data-side="BUY"  data-payload='${escAttr(payload)}'>
+            Buy ${escHtml(sig.option_type)}</button>
+          <button class="big sell js-order" data-side="SELL" data-payload='${escAttr(payload)}'>
+            Sell ${escHtml(sig.option_type)}</button>
+        </div>
+      </div>
+    ` : `<div class="reasons" style="margin-top:10px">No actionable option pick yet.</div>`;
+
+    return `
+      <div class="card">
+        <h2>${escHtml(sig.symbol)} ${biasPill(sig.bias)}
+          <span class="pill">conf ${((Number(sig.confidence)||0)*100).toFixed(0)}%</span>
+        </h2>
+
+        <!-- Score bar -->
+        <div style="margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:3px">
+            <span>Signal strength</span>
+            <span style="color:${scoreCol};font-weight:700">${score > 0 ? "+" : ""}${score} / 10</span>
+          </div>
+          <div style="height:4px;border-radius:2px;background:#1f2942">
+            <div style="height:100%;border-radius:2px;width:${scorePct}%;background:${scoreCol};transition:width .4s"></div>
+          </div>
+        </div>
+
+        <div class="row">
+          <span class="k">Spot
+            <span class="pill ${sig.spot_source === "NSE_LIVE" ? "good" : "warn"}" style="margin-left:4px;font-size:10px">
+              ${sig.spot_source === "NSE_LIVE" ? "🟢 Live" : "🟡 Delayed"}
+            </span>
+          </span>
+          <span class="mono">${fmt(sig.underlying_ltp)}</span>
+        </div>
+        <div class="row"><span class="k">RSI / MACD hist</span>
+          <span class="mono">${fmt(ind.rsi_14, 1)} / ${fmt(ind.macd_hist)}</span></div>
+        <div class="row"><span class="k">EMA 9 / 21 / 50</span>
+          <span class="mono">${fmt(ind.ema_9,1)} / ${fmt(ind.ema_21,1)} / ${fmt(ind.ema_50,1)}</span></div>
+        <div class="row"><span class="k">VWAP</span>
+          <span class="mono">${fmt(ind.vwap)}</span></div>
+        <div class="row"><span class="k">Supertrend</span>
+          <span class="mono">${fmt(ind.supertrend, 1)} (${stDir})</span></div>
+        ${pcr}
+
+        ${optSection}
+        <div class="reasons">${reasons}</div>
+      </div>
+    `;
+  }
+
+  // ── Order placement ────────────────────────────────────────────────────────
+  async function placeOrder(side, payload) {
+    const p  = typeof payload === "string" ? JSON.parse(payload) : payload;
+    const px = Number(p.price) || 0;
+    if (px <= 0) return toast("No live premium yet — wait for the next refresh.", false);
+    const rr = p.risk_reward ? ` | R:R ${Number(p.risk_reward).toFixed(1)}x` : "";
+    if (!confirm(`${side} ${p.qty} × ${p.symbol} @ ₹${px.toFixed(2)}${rr}?`)) return;
+    try {
+      const j = await apiPost("/api/order", { ...p, price: px, side });
+      if (j.status) {
+        toast(`${side} filled on ${p.symbol}. Balance: ${rupee(j.wallet.balance)}`);
+        refresh();
+      } else {
+        toast("Order rejected: " + (j.error || "unknown"), false);
+      }
+    } catch (e) { toast("Order failed: " + e.message, false); }
+  }
+
+  async function closePosition(id, symbol, ltp) {
+    if (!confirm("Close this position at market?")) return;
+    const body = { position_id: id, symbol };
+    if (ltp != null && !isNaN(ltp) && ltp > 0) body.price = ltp;
+    try {
+      const j = await apiPost("/api/close", body);
+      if (j.status) {
+        const p = (j.response && j.response.position) || {};
+        toast(`Closed ${symbol} — realized ${rupee(p.realized_pnl)}`);
+        refresh();
+      } else {
+        toast("Close failed: " + (j.error || "unknown"), false);
+      }
+    } catch (e) { toast("Close failed: " + e.message, false); }
+  }
+
+  // ── Event delegation ───────────────────────────────────────────────────────
+  document.getElementById("cards").addEventListener("click", e => {
+    const btn = e.target.closest(".js-order");
+    if (!btn) return;
+    const side = btn.dataset.side, payload = btn.dataset.payload;
+    if (side && payload) placeOrder(side, payload);
+  });
+
+  document.getElementById("open-tbl").addEventListener("click", e => {
+    const btn = e.target.closest(".close-btn");
+    if (!btn) return;
+    closePosition(btn.dataset.id, btn.dataset.symbol, Number(btn.dataset.ltp));
+  });
+
+  // ── Table renderers ────────────────────────────────────────────────────────
+  function renderOpen(positions) {
+    const tbody = document.querySelector("#open-tbl tbody");
+    if (!positions || !positions.length) {
+      tbody.innerHTML = `<tr><td colspan="9" style="color:var(--muted);text-align:center;padding:14px">No open positions</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = positions.map(p => `
+      <tr>
+        <td class="mono">${escHtml(p.symbol)}</td>
+        <td>${escHtml(p.side)}</td><td>${p.qty}</td>
+        <td class="mono">${fmt(p.entry_price)}</td>
+        <td class="mono">${fmt(p.ltp)}</td>
+        <td class="mono neg">${fmt(p.stop_loss)}</td>
+        <td class="mono pos">${fmt(p.target)}</td>
+        <td class="mono ${cls(p.unrealized_pnl)}">${fmt(p.unrealized_pnl)}</td>
+        <td><button class="close-btn"
+              data-id="${escAttr(String(p.id))}"
+              data-symbol="${escAttr(p.symbol)}"
+              data-ltp="${Number(p.ltp)||0}">Close</button></td>
+      </tr>`).join("");
+  }
+
+  function renderHistory(history) {
+    const tbody = document.querySelector("#hist-tbl tbody");
+    if (!history || !history.length) {
+      tbody.innerHTML = `<tr><td colspan="8" style="color:var(--muted);text-align:center;padding:14px">No closed trades yet</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = history.slice().reverse().slice(0, 20).map(p => `
+      <tr>
+        <td class="mono">${escHtml(p.symbol)}</td>
+        <td>${escHtml(p.side)}</td><td>${p.qty}</td>
+        <td class="mono">${fmt(p.entry_price)}</td>
+        <td class="mono">${fmt(p.exit_price)}</td>
+        <td class="mono ${cls(p.realized_pnl)}">${fmt(p.realized_pnl)}</td>
+        <td><span class="pill">${escHtml(p.close_reason || "—")}</span></td>
+        <td class="mono" style="color:var(--muted)">${escHtml((p.exit_time||"").replace("T"," "))}</td>
+      </tr>`).join("");
+  }
+
+  // ── Wallet renderer ────────────────────────────────────────────────────────
+  function renderWallet(w) {
+    if (!w) return;
+    document.getElementById("w-start").textContent   = rupee(w.starting_balance);
+    document.getElementById("w-balance").textContent = rupee(w.balance);
+    document.getElementById("w-equity").textContent  = rupee(w.equity);
+
+    const r = document.getElementById("w-realized");
+    r.textContent = rupee(w.realized_pnl);
+    r.className   = "v mono " + cls(w.realized_pnl);
+
+    const u = document.getElementById("w-unrealized");
+    u.textContent = rupee(w.unrealized_pnl);
+    u.className   = "v mono " + cls(w.unrealized_pnl);
+
+    const ret = document.getElementById("w-return");
+    const pct = Number(w.return_pct);
+    ret.textContent = isNaN(pct) ? "—" : (pct > 0 ? "+" : "") + pct.toFixed(2) + "%";
+    ret.className   = "v mono " + cls(pct);
+  }
+
+  // ── Main refresh ──────────────────────────────────────────────────────────
+  let _failCount = 0, _intervalId;
+
+  async function refresh() {
+    setConnStatus("spin");
+    try {
+      const r = await fetch("/api/state");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const ct = r.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        const text = await r.text();
+        throw new Error(`Non-JSON response (${r.status}): ${text.slice(0, 80)}`);
+      }
+      const s = await r.json();
+
+      setConnStatus("ok");
+      _failCount = 0;
+
+      document.getElementById("mode").textContent = s.mode || "PAPER";
+      document.getElementById("vix").textContent  =
+        "VIX " + (s.vix != null ? Number(s.vix).toFixed(2) : "–");
+      document.getElementById("refresh-lbl").textContent =
+        "last refresh " + (s.last_refresh || "–");
+
+      if (s.wallet) renderWallet(s.wallet);
+      if (s.daily)  renderDailyBar(s.daily);
+
+      // ── Market status banner ──────────────────────────────────────────────
+      const banner = document.getElementById("market-banner");
+      const mktMsg = document.getElementById("mkt-msg");
+      const mktIcon = document.getElementById("mkt-icon");
+      const mkt = s.market || {};
+      banner.className = "";
+      if (mkt.open) {
+        banner.classList.add("open");
+        mktIcon.textContent = "🟢";
+        mktMsg.textContent  = "Market open · " + (mkt.message || "NSE live session");
+      } else {
+        banner.classList.add("closed");
+        mktIcon.textContent = "🔴";
+        mktMsg.textContent  = (mkt.message || "Market closed") +
+          " · Signals and orders paused outside NSE hours (09:15–15:30 IST Mon–Fri)";
+      }
+
+      // ── Signal cards ──────────────────────────────────────────────────────
+      const symbols = Object.keys(s.signals || {});
+      const daily   = s.daily || {};
+
+      if (!mkt.open) {
+        document.getElementById("cards").innerHTML =
+          `<div class="card"><h2>🔴 Market Closed</h2>
+           <div class="reasons"><span>${escHtml(mkt.message || "Outside NSE hours.")}</span>
+           <span>Signals resume at 09:15 IST</span></div></div>`;
+      } else if (daily.locked) {
+        document.getElementById("cards").innerHTML =
+          `<div class="card"><h2>🎯 Daily Target Reached!</h2>
+           <div class="reasons">
+             <span>+${Number(daily.current_pct).toFixed(2)}% earned today</span>
+             <span>Target was ${daily.target_pct}%</span>
+             <span>No new entries for today — come back tomorrow</span>
+           </div></div>`;
+      } else {
+        document.getElementById("cards").innerHTML = symbols.length
+          ? symbols.map(k => renderSignal(s.signals[k])).join("")
+          : `<div class="card"><h2>⏳ Warming up…</h2>
+             <div class="reasons"><span>Fetching live NSE data...</span>
+             <span>First load may take 20–40 s</span></div></div>`;
+      }
+
+      if (s.wallet) {
+        renderOpen(s.wallet.open_positions || []);
+        renderHistory(s.wallet.history || []);
+      }
+
+      if (s.error) toast("Bot error: " + s.error, false);
+
+    } catch (e) {
+      _failCount++;
+      setConnStatus("err");
+      document.getElementById("refresh-lbl").textContent = "server unreachable";
+      toast("Refresh failed: " + e.message + " — is the server running? (python app.py)", false);
+      const delay = Math.min(10000 * Math.pow(2, _failCount - 1), 30000);
+      clearInterval(_intervalId);
+      _intervalId = setInterval(refresh, delay);
+    }
+  }
+
+  // ── Boot ───────────────────────────────────────────────────────────────────
+  refresh();
+  _intervalId = setInterval(refresh, 10000);
+</script>
+</body>
+</html>
